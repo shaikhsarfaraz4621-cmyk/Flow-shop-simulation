@@ -3,3 +3,4 @@ pandas
 plotly
 simpy
 openpyxl
+openai

@@ -12,6 +12,7 @@ from components.dashboard import (
     render_flow_dynamics, 
     render_job_performance
 )
+from components.ai_assistant import render_ai_assistant
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -60,7 +61,7 @@ with st.sidebar:
 st.markdown('<div class="dashboard-header">🏭 Factory Digital Twin</div>', unsafe_allow_html=True)
 
 # TABBING FOR CLEAN INTERFACE
-tab_sim, tab_config = st.tabs(["📊 Performance Dashboard", "📝 Edit Configuration"])
+tab_sim, tab_config, tab_ai = st.tabs(["📊 Performance Dashboard", "📝 Edit Configuration", "🤖 Ask the Factory AI"])
 
 with tab_config:
     st.subheader("Edit Setup Values Directly")
@@ -129,6 +130,9 @@ if 'simulation_results' in st.session_state:
 
         with st.expander("📝 View Raw Simulation Event Logs"):
             st.dataframe(results["Logs"], use_container_width=True)
+
+    with tab_ai:
+        render_ai_assistant(results, st.session_state['machines_df'])
 
 else:
     with tab_sim:
