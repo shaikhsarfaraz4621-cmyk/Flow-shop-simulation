@@ -54,8 +54,10 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 🛠️ Quick Controls")
+    num_runs = st.number_input("Number of Simulation Runs", min_value=1, max_value=100, value=5)
     if st.button("🚀 Run New Simulation", use_container_width=True, type="primary"):
         st.session_state['trigger_sim'] = True
+        st.session_state['num_runs'] = num_runs
 
 # --- MAIN AREA ---
 st.markdown('<div class="dashboard-header">🏭 Factory Digital Twin</div>', unsafe_allow_html=True)
@@ -97,12 +99,93 @@ with tab_config:
 if st.session_state.get('trigger_sim', False):
     with st.spinner("🚀 Running Engine..."):
         try:
-            sim = FactorySimulation(
-                st.session_state['machines_df'], 
-                st.session_state['jobs_df'], 
-                st.session_state['routings_df']
-            )
-            st.session_state['simulation_results'] = sim.run()
+            import math
+            results_list = []
+            runs = st.session_state.get('num_runs', 1)
+            for i in range(runs):
+                sim = FactorySimulation(
+                    st.session_state['machines_df'], 
+                    st.session_state['jobs_df'], 
+                    st.session_state['routings_df']
+                )
+                results_list.append(sim.run())
+            
+            # Aggregate stats
+            df_stats = pd.DataFrame({
+                'Makespan': [r['Total_Time'] for r in results_list],
+                'Lead_Time': [r['Batch_Metrics']['Flow_Time'].mean() for r in results_list],
+                'Units': [r['Batch_Metrics']['Units'].sum() for r in results_list],
+                'Efficiency': [(r['Batch_Metrics']['Active_Time'] / r['Batch_Metrics']['Flow_Time'] * 100).mean() for r in results_list]
+            })
+            
+            all_batches = []
+            all_logs = []
+            all_wip = []
+            all_gantt = []
+            
+            machine_stats_agg = {}
+            for m_id in results_list[0]['Machine_Stats']:
+                machine_stats_agg[m_id] = {'working_time': 0, 'setup_time': 0, 'down_time': 0}
+                
+            for run_idx, r in enumerate(results_list):
+                run_id = f"Run_{run_idx+1}"
+                
+                bm = r['Batch_Metrics'].copy()
+                bm['Run_ID'] = run_id
+                all_batches.append(bm)
+                
+                lg = r['Logs'].copy()
+                lg['Run_ID'] = run_id
+                all_logs.append(lg)
+                
+                wip = r['WIP_Timeline'].copy()
+                wip['Run_ID'] = run_id
+                all_wip.append(wip)
+                
+                gantt = r['Gantt_Log'].copy()
+                gantt['Run_ID'] = run_id
+                if not gantt.empty:
+                    all_gantt.append(gantt)
+                
+                for m_id, stats in r['Machine_Stats'].items():
+                    machine_stats_agg[m_id]['working_time'] += stats['working_time']
+                    machine_stats_agg[m_id]['setup_time'] += stats['setup_time']
+                    machine_stats_agg[m_id]['down_time'] += stats['down_time']
+
+            for m_id in machine_stats_agg:
+                machine_stats_agg[m_id]['working_time'] /= runs
+                machine_stats_agg[m_id]['setup_time'] /= runs
+                machine_stats_agg[m_id]['down_time'] /= runs
+
+            def get_stats(col):
+                mean = df_stats[col].mean()
+                std = df_stats[col].std() if len(df_stats) > 1 else 0.0
+                n = len(df_stats)
+                ci95 = 1.96 * (std / math.sqrt(n)) if n > 1 else 0.0
+                return {"mean": mean, "std": std, "ci95": ci95}
+                
+            multi_stats = {
+                'Number_of_Runs': runs,
+                'Makespan': get_stats('Makespan'),
+                'Lead_Time': get_stats('Lead_Time'),
+                'Units': get_stats('Units'),
+                'Efficiency': get_stats('Efficiency')
+            }
+            
+            final_result = {
+                "Total_Time": df_stats['Makespan'].mean(),
+                "Batch_Metrics": pd.concat(all_batches, ignore_index=True),
+                "Machine_Stats": machine_stats_agg,
+                "Logs": pd.concat(all_logs, ignore_index=True),
+                "WIP_Timeline": pd.concat(all_wip, ignore_index=True),
+                "Gantt_Log": pd.concat(all_gantt, ignore_index=True) if all_gantt else pd.DataFrame(),
+                "Completed_Jobs": results_list[-1]["Completed_Jobs"],
+                "MultiRunStats": multi_stats,
+                "df_stats": df_stats
+            }
+            
+            st.session_state['simulation_results_list'] = results_list
+            st.session_state['simulation_results'] = final_result
             st.session_state['trigger_sim'] = False
         except Exception as e:
             st.error(f"Simulation Failed: {e}")
@@ -110,9 +193,22 @@ if st.session_state.get('trigger_sim', False):
 
 # --- DASHBOARD RENDERING ---
 if 'simulation_results' in st.session_state:
-    results = st.session_state['simulation_results']
+    results_agg = st.session_state['simulation_results']
+    results_list = st.session_state.get('simulation_results_list', [results_agg])
     
     with tab_sim:
+        st.subheader("Dashboard View Options")
+        run_options = ["All Runs (Aggregated)"] + [f"Run_{i+1}" for i in range(len(results_list))]
+        selected_view = st.selectbox("📊 Select Dashboard View:", run_options)
+        
+        if selected_view == "All Runs (Aggregated)":
+            results = results_agg
+        else:
+            run_idx = int(selected_view.split("_")[1]) - 1
+            results = results_list[run_idx]
+
+        st.divider()
+
         # 1. TOP METRICS
         render_top_metrics(results)
         st.divider()

@@ -18,15 +18,34 @@ def get_ai_context(results, machines_df):
     
     bottleneck_m, bottleneck_val = max(utilization_data, key=lambda x: x[1])
     
-    context = f"""
-    You are a Factory Optimization Expert. Analyze the following simulation results:
+    if "MultiRunStats" in results:
+        m_stats = results["MultiRunStats"]
+        runs = m_stats['Number_of_Runs']
+        perf_summary = f"""
+    - Number of Runs: {runs}
+    - Total Production Time (Makespan): Mean={round(m_stats['Makespan']['mean'], 1)} min, SD={round(m_stats['Makespan']['std'], 1)}, 95% CI=[{round(m_stats['Makespan']['mean'] - m_stats['Makespan']['ci95'], 1)}, {round(m_stats['Makespan']['mean'] + m_stats['Makespan']['ci95'], 1)}]
+    - Average Batch Lead Time: Mean={round(m_stats['Lead_Time']['mean'], 1)} min, SD={round(m_stats['Lead_Time']['std'], 1)}, 95% CI=[{round(m_stats['Lead_Time']['mean'] - m_stats['Lead_Time']['ci95'], 1)}, {round(m_stats['Lead_Time']['mean'] + m_stats['Lead_Time']['ci95'], 1)}]
+    - Total Units Completed: Mean={round(m_stats['Units']['mean'], 1)}, SD={round(m_stats['Units']['std'], 1)}, 95% CI=[{round(m_stats['Units']['mean'] - m_stats['Units']['ci95'], 1)}, {round(m_stats['Units']['mean'] + m_stats['Units']['ci95'], 1)}]
+    - Average Flow Efficiency: Mean={round(m_stats['Efficiency']['mean'], 1)}%, SD={round(m_stats['Efficiency']['std'], 1)}%, 95% CI=[{round(m_stats['Efficiency']['mean'] - m_stats['Efficiency']['ci95'], 1)}%, {round(m_stats['Efficiency']['mean'] + m_stats['Efficiency']['ci95'], 1)}%]
+    - Critical Bottleneck (Last Run): {bottleneck_m} ({round(bottleneck_val, 1)}% busy).
+    - Resource Stats (Last Run): {stats}
+"""
+        prompt_instruction = "The user is asking a question about these results. Provide a professional, data-driven answer. Since these results are aggregated over multiple simulation runs, explicitly state the 95% confidence intervals when discussing future, projected, or what-if scenarios to highlight the statistical reliability of the predictions."
+    else:
+        perf_summary = f"""
     - Total Production Time (Makespan): {round(total_time, 1)} min.
     - Average Batch Lead Time: {round(df_batches['Flow_Time'].mean(), 1)} min.
     - Total Units Completed: {df_batches['Units'].sum()}.
     - Critical Bottleneck: {bottleneck_m} ({round(bottleneck_val, 1)}% busy).
     - Resource Stats: {stats}
+"""
+        prompt_instruction = "The user is asking a question about these results. Provide a professional, data-driven answer."
+        
+    context = f"""
+    You are a Factory Optimization Expert. Analyze the following simulation results:
+    {perf_summary}
     
-    The user is asking a question about these results. Provide a professional, data-driven answer.
+    {prompt_instruction}
     """
     return context
 

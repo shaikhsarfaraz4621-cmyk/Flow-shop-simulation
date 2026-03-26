@@ -5,17 +5,25 @@ import plotly.graph_objects as go
 
 def render_top_metrics(results):
     """Render the top metric cards."""
-    total_time = results["Total_Time"]
-    df_batches = results["Batch_Metrics"]
-    
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Production Makespan", f"{round(total_time, 1)} min")
-    m2.metric("Avg Batch Lead Time", f"{round(df_batches['Flow_Time'].mean(), 1)} min")
-    m3.metric("Total Success Units", int(df_batches['Units'].sum()))
     
-    # Calculate Flow Efficiency
-    df_batches["Efficiency"] = (df_batches["Active_Time"] / df_batches["Flow_Time"]) * 100
-    m4.metric("Avg Flow Efficiency", f"{round(df_batches['Efficiency'].mean(), 1)}%")
+    if "MultiRunStats" in results:
+        stats = results["MultiRunStats"]
+        m1.metric("Production Makespan", f"{round(stats['Makespan']['mean'], 1)} ± {round(stats['Makespan']['ci95'], 1)} min")
+        m2.metric("Avg Batch Lead Time", f"{round(stats['Lead_Time']['mean'], 1)} ± {round(stats['Lead_Time']['ci95'], 1)} min")
+        m3.metric("Total Success Units", f"{round(stats['Units']['mean'], 1)} ± {round(stats['Units']['ci95'], 1)}")
+        m4.metric("Avg Flow Efficiency", f"{round(stats['Efficiency']['mean'], 1)} ± {round(stats['Efficiency']['ci95'], 1)}%")
+    else:
+        total_time = results["Total_Time"]
+        df_batches = results["Batch_Metrics"]
+        
+        m1.metric("Production Makespan", f"{round(total_time, 1)} min")
+        m2.metric("Avg Batch Lead Time", f"{round(df_batches['Flow_Time'].mean(), 1)} min")
+        m3.metric("Total Success Units", int(df_batches['Units'].sum()))
+        
+        # Calculate Flow Efficiency
+        df_batches["Efficiency"] = (df_batches["Active_Time"] / df_batches["Flow_Time"]) * 100
+        m4.metric("Avg Flow Efficiency", f"{round(df_batches['Efficiency'].mean(), 1)}%")
 
 def render_utilization_analysis(results, res_machines_df):
     """Render machine utilization bars and bottleneck insights."""
@@ -41,7 +49,7 @@ def render_utilization_analysis(results, res_machines_df):
     with c_util:
         fig_util = px.bar(
             df_util, x="Machine", y="Value", color="Type",
-            title="Resource Utilization Breakdown",
+            title="Avg Resource Utilization Breakdown" if "MultiRunStats" in results else "Resource Utilization Breakdown",
             color_discrete_map={"Processing": "#2ca02c", "Setup": "#ff7f0e", "Failure": "#d62728", "Idle/Wait": "#1f77b4"},
             labels={"Value": "Percentage Time (%)"}
         )
@@ -68,8 +76,13 @@ def render_flow_dynamics(results):
     c_left, c_right = st.columns(2)
     
     with c_left:
-        st.subheader("📦 Work-In-Progress (WIP) Trend")
-        fig_wip = px.area(results["WIP_Timeline"], x="Time", y="WIP", title="Active Batches in Factory", line_shape='hv', color_discrete_sequence=['#00d4ff'])
+        if "Run_ID" in results["WIP_Timeline"].columns and len(results["WIP_Timeline"]["Run_ID"].unique()) > 1:
+            st.subheader("📦 Work-In-Progress (WIP) Variances")
+            fig_wip = px.line(results["WIP_Timeline"], x="Time", y="WIP", color="Run_ID", title="Active Batches (All Runs)", line_shape='hv')
+            fig_wip.update_traces(opacity=0.6)
+        else:
+            st.subheader("📦 Work-In-Progress (WIP) Trend")
+            fig_wip = px.area(results["WIP_Timeline"], x="Time", y="WIP", title="Active Batches in Factory", line_shape='hv', color_discrete_sequence=['#00d4ff'])
         st.plotly_chart(fig_wip, use_container_width=True)
         
     with c_right:
@@ -77,12 +90,30 @@ def render_flow_dynamics(results):
         gdf = results.get("Gantt_Log", pd.DataFrame())
         if not gdf.empty:
             machine_options = gdf["Category_ID"].unique().tolist()
-            sel_m = st.selectbox("Select Machine:", machine_options)
-            
-            m_gdf = gdf[gdf["Category_ID"] == sel_m].sort_values("Start")
+            if "Run_ID" in gdf.columns:
+                run_options = gdf["Run_ID"].unique().tolist()
+                
+                c_sel1, c_sel2 = st.columns(2)
+                sel_run = c_sel1.selectbox("Select Run:", run_options)
+                sel_m = c_sel2.selectbox("Select Machine:", machine_options)
+                
+                m_gdf = gdf[(gdf["Category_ID"] == sel_m) & (gdf["Run_ID"] == sel_run)].sort_values("Start")
+            else:
+                sel_m = st.selectbox("Select Machine:", machine_options)
+                m_gdf = gdf[gdf["Category_ID"] == sel_m].sort_values("Start")
+   
             points = []
             last_end = 0
-            total_time = results["Total_Time"]
+            
+            # Since total_time might be the mean across runs now, we grab the max finish of this specific run or Use the specific run's makespan
+            if "df_stats" in results:
+                run_idx = int(sel_run.split("_")[1]) - 1
+                sp_total_time = results["df_stats"].iloc[run_idx]["Makespan"]
+                run_label = f"({sel_run})"
+            else:
+                sp_total_time = results["Total_Time"]
+                run_label = ""
+                
             for _, row in m_gdf.iterrows():
                 if row["Start"] > last_end:
                     points.append({"Time": last_end, "State": "Idle"})
@@ -91,11 +122,11 @@ def render_flow_dynamics(results):
                 points.append({"Time": row["Finish"], "State": row["State"]})
                 last_end = max(last_end, row["Finish"])
             
-            if last_end < total_time:
+            if last_end < sp_total_time:
                 points.append({"Time": last_end, "State": "Idle"})
-                points.append({"Time": total_time, "State": "Idle"})
+                points.append({"Time": sp_total_time, "State": "Idle"})
             
-            fig_flow = px.line(pd.DataFrame(points), x="Time", y="State", title=f"{sel_m} States", line_shape='hv')
+            fig_flow = px.line(pd.DataFrame(points), x="Time", y="State", title=f"{sel_m} States {run_label}", line_shape='hv')
             fig_flow.update_yaxes(categoryorder="array", categoryarray=["Failure", "Idle", "Setup", "Processing"])
             st.plotly_chart(fig_flow, use_container_width=True)
 
